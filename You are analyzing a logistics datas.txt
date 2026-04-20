@@ -1,0 +1,173 @@
+You are analyzing a logistics dataset consisting of Full Load (FL) and Part Load (PL) shipments.
+
+=====================
+
+DATASET SUMMARY
+
+=====================
+
+- Full Load rows: 690
+
+- Part Load rows: 1470
+
+- Timeline: Jan 2026 – Mar 2026 (ignore any outliers like 2006)
+
+=====================
+
+COLUMN STANDARDIZATION
+
+=====================
+
+Unify both datasets into this schema:
+
+date → Dispatch Date (FL) / DIS DATE (PL)
+
+type → PO Type (FL) / PROJ TYPE (PL)
+
+movement → Movement (FL) / MOV TYPE (PL)
+
+origin → Source WH (From) / FROM or FROM WH/VENDOR
+
+destination → Target WH (To) / TO or TO WH/PROJECT
+
+requester → Requested By / REQ BY
+
+transporter → Transporter Name / TRANSPORT
+
+weight → Weight (In Kgs) / WEIGHT
+
+freight → Freight / APROX FREIGHT
+
+identifier → Vehicle No. / TRACKING
+
+=====================
+
+DATA CLEANING RULES
+
+=====================
+
+1. Convert APROX FREIGHT to numeric (remove commas)
+
+2. Convert all date columns to datetime
+
+3. Remove records outside 2026
+
+4. Standardize movement:
+
+   - "End Mile" = "Last Mile"
+
+5. Handle missing values in:
+
+   - Weight
+
+   - Freight
+
+   - Vehicle No / Tracking
+
+=====================
+
+KEY METRICS TO BUILD
+
+=====================
+
+1. Total Spend = SUM(Freight)
+
+2. Total Weight = SUM(weight)
+
+3. Cost per KG = Freight / Weight
+
+4. Avg Cost per KG by:
+
+   - Transporter
+
+   - Movement Type
+
+5. Load Mix:
+
+   - % Full Load vs Part Load
+
+6. Movement Mix:
+
+   - First Mile / Mid Mile / Last Mile
+
+7. Top Routes:
+
+   - origin → destination by weight & spend
+
+8. Transporter Performance:
+
+   - Cost efficiency ranking
+
+=====================
+
+ADVANCED METRICS
+
+=====================
+
+(Full Load only)
+
+- Utilization = Actual Weight / Weight (In Kgs)
+
+=====================
+
+EXPECTED OUTPUT
+
+=====================
+
+Build a dashboard-ready dataset and insights including:
+
+1. Time series:
+
+   - Spend trend
+
+   - Weight trend
+
+2. Rankings:
+
+   - Top transporters by efficiency
+
+   - Top routes
+
+3. Distribution:
+
+   - B2B vs B2C spend
+
+   - Movement split
+
+4. Insights:
+
+   - Identify expensive routes
+
+   - Identify underutilized trucks
+
+   - Highlight anomalies
+
+=====================
+
+IMPORTANT NOTES
+
+=====================
+
+- Full Load = high weight (~7,500 kg avg)
+
+- Part Load = low weight (~324 kg avg)
+
+- Treat them differently in analysis where needed
+
+- Do NOT mix without normalization
+
+=====================
+
+GOAL
+
+=====================
+
+Return:
+
+1. Cleaned unified dataset structure
+
+2. KPI calculations
+
+3. Dashboard-ready aggregated tables
+
+4. Key business insights (concise)
