@@ -627,94 +627,78 @@ async function loadData() {
   document.getElementById('refresh-btn').classList.remove('loading');
 }
 
-// Fetch a sheet tab by its visible name using JSONP (script-tag injection).
-// This bypasses CORS entirely — works even when the dashboard is opened via
-// the file:// protocol. Google's gviz endpoint supports `responseHandler`
-// to wrap the JSON payload in a callback invocation.
+// ── Sheet fetcher ────────────────────────────────────────────────────────────
+// Primary: fetch() with the gviz CSV export — fast, no row-limit, works on
+//          HTTPS (GitHub Pages). Google sets CORS * for public sheets.
+// Fallback: JSONP script-tag injection — works on file:// protocol and as a
+//           safety net when fetch() is unavailable or blocked.
+// ─────────────────────────────────────────────────────────────────────────────
 function fetchSheetByName(sheetName) {
+  const csvUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`
+    + `?tqx=out:csv`
+    + `&sheet=${encodeURIComponent(sheetName)}`;
+
+  // Try fetch() first (fast, reliable on HTTPS)
+  if (typeof fetch !== 'undefined') {
+    return fetch(csvUrl, { cache: 'no-store' })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status} for "${sheetName}"`);
+        return r.text();
+      })
+      .then(text => {
+        if (!text || !text.trim()) throw new Error(`Empty response for "${sheetName}"`);
+        return text;
+      })
+      .catch(() => fetchSheetJSONP(sheetName)); // fall back to JSONP
+  }
+  return fetchSheetJSONP(sheetName);
+}
+
+// JSONP fallback — used on file:// or when fetch() is blocked
+function fetchSheetJSONP(sheetName) {
   return new Promise((resolve, reject) => {
     const cbName = 'gvizCb_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now();
-    // &tq=select%20* bypasses the gviz default row-limit (~500 rows).
-    // Without it, large sheets are silently truncated (was causing only 266 rows).
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq`
       + `?tqx=out:json;responseHandler:${cbName}`
       + `&sheet=${encodeURIComponent(sheetName)}`
-      + `&headers=1`
       + `&tq=select%20*`;
 
     let settled = false;
     const script = document.createElement('script');
-
     const cleanup = () => {
       try { delete window[cbName]; } catch(_) { window[cbName] = undefined; }
       if (script.parentNode) script.parentNode.removeChild(script);
       if (timer) clearTimeout(timer);
     };
-
-    window[cbName] = (payload) => {
+    window[cbName] = payload => {
       if (settled) return; settled = true;
-      try {
-        const csv = gvizToCsv(payload);
-        cleanup();
-        if (!csv || !csv.trim()) reject(new Error('Empty response for "' + sheetName + '"'));
-        else resolve(csv);
-      } catch (e) { cleanup(); reject(e); }
+      try { const csv = gvizToCsv(payload); cleanup(); resolve(csv); }
+      catch(e) { cleanup(); reject(e); }
     };
-
-    script.onerror = () => {
-      if (settled) return; settled = true;
-      cleanup();
-      reject(new Error('Failed to load "' + sheetName + '" — check sheet name & sharing'));
-    };
-
-    const timer = setTimeout(() => {
-      if (settled) return; settled = true;
-      cleanup();
-      reject(new Error('Timeout loading "' + sheetName + '"'));
-    }, 25000);
-
+    script.onerror = () => { if (settled) return; settled = true; cleanup(); reject(new Error(`JSONP failed: "${sheetName}"`)); };
+    const timer = setTimeout(() => { if (settled) return; settled = true; cleanup(); reject(new Error(`Timeout: "${sheetName}"`)); }, 25000);
     script.src = url;
     document.head.appendChild(script);
   });
 }
 
-// Convert Google Visualization API JSON payload to RFC-4180 CSV text so the
-// existing CSV parser & downstream logic can consume it unchanged.
+// gviz JSON → CSV (used by JSONP fallback path)
 function gvizToCsv(payload) {
   if (!payload || !payload.table) throw new Error('Invalid gviz payload');
   const cols = payload.table.cols || [];
   const rows = payload.table.rows || [];
-  const headers = cols.map((c, i) =>
-    (c && c.label && String(c.label).trim()) ||
-    (c && c.id) ||
-    ('col_' + i)
-  );
-  const esc = v => {
-    if (v == null) return '';
-    const s = String(v);
-    if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
-    return s;
-  };
+  const headers = cols.map((c, i) => (c && c.label && String(c.label).trim()) || (c && c.id) || ('col_' + i));
+  const esc = v => { if (v == null) return ''; const s = String(v); if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"'; return s; };
   const out = [headers.map(esc).join(',')];
   for (const r of rows) {
     const cells = (r && r.c) || [];
     const vals = headers.map((_, i) => {
-      const cell = cells[i];
-      if (!cell) return '';
-      // Prefer the formatted value (e.g. "Jan 2, 2026", "1,234") when present.
+      const cell = cells[i]; if (!cell) return '';
       if (cell.f != null && cell.f !== '') return cell.f;
-      const v = cell.v;
-      if (v == null) return '';
-      // Google returns dates as "Date(yyyy,mm,dd[,hh,mm,ss])" strings.
+      const v = cell.v; if (v == null) return '';
       if (typeof v === 'string') {
         const m = v.match(/^Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+),(\d+))?/);
-        if (m) {
-          const d = new Date(+m[1], +m[2], +m[3], +(m[4]||0), +(m[5]||0), +(m[6]||0));
-          if (!isNaN(d)) {
-            const pad = n => String(n).padStart(2, '0');
-            return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-          }
-        }
+        if (m) { const d = new Date(+m[1],+m[2],+m[3],+(m[4]||0),+(m[5]||0),+(m[6]||0)); if (!isNaN(d)) { const p=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; } }
       }
       return v;
     });
