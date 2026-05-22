@@ -572,15 +572,14 @@ async function loadData() {
   try {
     // Fetch only the two tabs that actually exist. Use allSettled so a
     // single failure doesn't abort the whole pipeline.
-    const [fullRes, partRes, dvRes] = await Promise.allSettled([
+    // Load FL + PL first — these power the main 5 tabs
+    const [fullRes, partRes] = await Promise.allSettled([
       fetchSheetByName(SHEET_NAMES.FULL),
       fetchSheetByName(SHEET_NAMES.PART),
-      fetchSheetByName(SHEET_NAMES.DV),
     ]);
 
     const fullCsv = fullRes.status === 'fulfilled' ? fullRes.value : '';
     const partCsv = partRes.status === 'fulfilled' ? partRes.value : '';
-    const dvCsv   = dvRes.status  === 'fulfilled' ? dvRes.value  : '';
 
     if (!fullCsv && !partCsv) {
       const err = (fullRes.reason || partRes.reason || new Error('fetch failed'));
@@ -589,8 +588,16 @@ async function loadData() {
 
     RAW_FULL = fullCsv ? parseFullLoad(fullCsv) : [];
     RAW_PART = partCsv ? parsePartLoad(partCsv) : [];
-    RAW_DV   = dvCsv   ? parseLastMileDV(dvCsv) : [];
     ALL_DATA = [...RAW_FULL, ...RAW_PART];
+
+    // Load DV tab in background — doesn't block main dashboard render
+    fetchSheetByName(SHEET_NAMES.DV).then(dvCsv => {
+      RAW_DV = dvCsv ? parseLastMileDV(dvCsv) : [];
+      if (activeTab === 'dv') renderDVAnalytics();
+    }).catch(() => {
+      RAW_DV = [];
+      if (activeTab === 'dv') renderDVAnalytics();
+    });
 
     // Last Mile DV is derived — prefer rows whose movement contains "DV";
     // fall back to all "Last Mile" rows if no DV-specific rows exist.
@@ -605,7 +612,7 @@ async function loadData() {
 
     const now = new Date();
     document.getElementById('last-updated').textContent = 'Updated ' + now.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
-    setStatus(`Live ✓ ${ALL_DATA.length.toLocaleString()} records (FL: ${RAW_FULL.length.toLocaleString()} · PL: ${RAW_PART.length.toLocaleString()} · DV: ${RAW_DV.length.toLocaleString()})`);
+    setStatus(`Live ✓ ${ALL_DATA.length.toLocaleString()} records (FL: ${RAW_FULL.length.toLocaleString()} · PL: ${RAW_PART.length.toLocaleString()})`);
   } catch(e) {
     console.error(e);
     setStatus('Error');
