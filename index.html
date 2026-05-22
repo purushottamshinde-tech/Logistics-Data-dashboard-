@@ -561,24 +561,7 @@ let activeTab = 'overview', selectedVendor = null, dataLoaded = false;
 // ============================================================
 // BOOTSTRAP
 // ============================================================
-document.addEventListener('DOMContentLoaded', () => {
-  loadData();
-  // Safety timeout — if dashboard is still loading after 30s, show error
-  setTimeout(() => {
-    if (!dataLoaded) {
-      setStatus('Timeout');
-      document.getElementById('refresh-btn').classList.remove('loading');
-      document.getElementById('overview-loading').innerHTML = `<div class="error-state">
-        ⚠️ Dashboard loading timed out after 30 seconds.<br><br>
-        Possible causes:<br>
-        • The Google Sheet may not be <strong>Published to web</strong> (File → Share → Publish to web)<br>
-        • Network or CORS issue — try opening from a web server (not file://)<br>
-        • Google Sheets API may be rate-limited<br><br>
-        <a onclick="refreshData()">↻ Try again</a>
-      </div>`;
-    }
-  }, 30000);
-});
+document.addEventListener('DOMContentLoaded', () => { loadData(); });
 
 async function loadData() {
   setStatus('Loading…');
@@ -587,7 +570,6 @@ async function loadData() {
   document.getElementById('overview-content').style.display = 'none';
 
   try {
-    console.log('[Dashboard] Fetching Full Load + Part Load sheets...');
     // Fetch only the two tabs that actually exist. Use allSettled so a
     // single failure doesn't abort the whole pipeline.
     // Load FL + PL first — these power the main 5 tabs
@@ -595,9 +577,6 @@ async function loadData() {
       fetchSheetByName(SHEET_NAMES.FULL),
       fetchSheetByName(SHEET_NAMES.PART),
     ]);
-
-    console.log('[Dashboard] Full Load fetch:', fullRes.status, fullRes.status === 'rejected' ? fullRes.reason : `${(fullRes.value||'').length} chars`);
-    console.log('[Dashboard] Part Load fetch:', partRes.status, partRes.status === 'rejected' ? partRes.reason : `${(partRes.value||'').length} chars`);
 
     const fullCsv = fullRes.status === 'fulfilled' ? fullRes.value : '';
     const partCsv = partRes.status === 'fulfilled' ? partRes.value : '';
@@ -610,7 +589,6 @@ async function loadData() {
     RAW_FULL = fullCsv ? parseFullLoad(fullCsv) : [];
     RAW_PART = partCsv ? parsePartLoad(partCsv) : [];
     ALL_DATA = [...RAW_FULL, ...RAW_PART];
-    console.log('[Dashboard] Parsed — Full Load:', RAW_FULL.length, 'rows, Part Load:', RAW_PART.length, 'rows, Total:', ALL_DATA.length);
 
     // Load DV tab in background — doesn't block main dashboard render
     fetchSheetByName(SHEET_NAMES.DV).then(dvCsv => {
@@ -629,8 +607,8 @@ async function loadData() {
       : ALL_DATA.filter(r => /last\s*mile/i.test(r.movement || ''));
 
     populateFilters();
-    dataLoaded = true;
     applyFilters();
+    dataLoaded = true;
 
     const now = new Date();
     document.getElementById('last-updated').textContent = 'Updated ' + now.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
@@ -662,24 +640,16 @@ function fetchSheetByName(sheetName) {
 
   // Try fetch() first (fast, reliable on HTTPS)
   if (typeof fetch !== 'undefined') {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000); // 20s timeout
-    return fetch(csvUrl, { cache: 'no-store', signal: controller.signal })
+    return fetch(csvUrl, { cache: 'no-store' })
       .then(r => {
-        clearTimeout(timeout);
         if (!r.ok) throw new Error(`HTTP ${r.status} for "${sheetName}"`);
         return r.text();
       })
       .then(text => {
         if (!text || !text.trim()) throw new Error(`Empty response for "${sheetName}"`);
-        // Guard: gviz may return HTML (login page) or a JS error wrapper instead of CSV
-        const trimmed = text.trim();
-        if (trimmed.startsWith('<!') || trimmed.startsWith('<html') || trimmed.startsWith('google.visualization')) {
-          throw new Error(`Non-CSV response for "${sheetName}"`);
-        }
         return text;
       })
-      .catch(err => { clearTimeout(timeout); return fetchSheetJSONP(sheetName); }); // fall back to JSONP
+      .catch(() => fetchSheetJSONP(sheetName)); // fall back to JSONP
   }
   return fetchSheetJSONP(sheetName);
 }
@@ -1015,18 +985,12 @@ function switchTab(tab) {
 
 function renderActiveTab() {
   if (!dataLoaded && activeTab !== 'overview') return;
-  try {
-    if (activeTab==='overview') renderOverview();
-    else if (activeTab==='firstmile') renderFirstMile();
-    else if (activeTab==='midmile') renderMidMile();
-    else if (activeTab==='lastmile') renderLastMile();
-    else if (activeTab==='vendors') { renderVendorLanes(); renderVendorList(); }
-    else if (activeTab==='dv') renderDVAnalytics();
-  } catch(e) {
-    console.error('Render error:', e);
-    const loadEl = document.getElementById('overview-loading');
-    if (loadEl) loadEl.innerHTML = `<div class="error-state">⚠️ Dashboard render error: <code style="font-size:10px">${e.message}</code><br><br><a onclick="refreshData()">↻ Try again</a></div>`;
-  }
+  if (activeTab==='overview') renderOverview();
+  else if (activeTab==='firstmile') renderFirstMile();
+  else if (activeTab==='midmile') renderMidMile();
+  else if (activeTab==='lastmile') renderLastMile();
+  else if (activeTab==='vendors') { renderVendorLanes(); renderVendorList(); }
+  else if (activeTab==='dv') renderDVAnalytics();
 }
 
 // ============================================================
@@ -1865,3 +1829,7 @@ function renderDVAnalytics() {
     b2bEl.innerHTML = '<tr><td colspan="7" class="no-data">No B2B accounts in current data</td></tr>';
   }
 }
+
+</script>
+</body>
+</html>
