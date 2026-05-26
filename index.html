@@ -858,7 +858,11 @@ function parsePartLoad(csv) {
       vehicleNo: cleanTxt(fget(r, ['TRACKING', 'Vehicle No.', 'Vehicle No'])),
       weight: pNum(fget(r, ['WEIGHT', 'Weight', 'Weight (In Kgs)'])),
       freight: pNum(fget(r, ['APROX FREIGHT', 'Freight', 'Aprox Freight'])),
-      ratePerKg: null,
+      ratePerKg: (() => {
+        const f = pNum(fget(r, ['APROX FREIGHT', 'Freight', 'Aprox Freight']));
+        const w = pNum(fget(r, ['WEIGHT', 'Weight', 'Weight (In Kgs)']));
+        return (f != null && w != null && w > 0) ? +(f / w).toFixed(2) : null;
+      })(),
       actualWeight: null,
       weightConsumption: null,
     };
