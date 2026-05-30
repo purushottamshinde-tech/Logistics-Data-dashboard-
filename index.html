@@ -334,6 +334,7 @@ td.lane-cell{max-width:240px;white-space:normal;line-height:1.35;font-weight:600
   <div class="nav-tab" id="ntab-midmile" onclick="switchTab('midmile')">🔄 Mid Mile</div>
   <div class="nav-tab" id="ntab-lastmile" onclick="switchTab('lastmile')">🏁 Last Mile</div>
   <div class="nav-tab" id="ntab-vendors" onclick="switchTab('vendors')">🏢 Vendor Intel</div>
+  <div class="nav-tab" id="ntab-dv" onclick="switchTab('dv')">📦 DV Analytics</div>
 </div>
 
 <!-- MAIN -->
@@ -492,6 +493,49 @@ td.lane-cell{max-width:240px;white-space:normal;line-height:1.35;font-weight:600
 </div>
 
 
+<!-- DV ANALYTICS TAB -->
+<div class="tab-panel fade-in" id="tab-dv">
+  <div id="dv-loading" class="loading-state"><div class="loading-spinner"></div><span>Loading Last Mile DV data from Google Sheets…</span></div>
+  <div id="dv-content" style="display:none">
+    <div class="section">
+      <div class="section-hd"><div class="section-title">Delivery Quality — Overall KPIs</div></div>
+      <div class="kpi-grid" id="dv-summary-kpis"></div>
+    </div>
+    <div class="section">
+      <div class="section-hd">
+        <div class="section-title">Table 1 — Dispatch Stages per Warehouse</div>
+        <div style="font-size:10px;color:var(--text4);font-family:var(--mono)">ERPNext · Jan–Mar 2026 · B2B/AMC excluded from main view</div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>WH</th><th># of Installs</th><th>First Dispatch</th><th>Second Dispatch</th><th>&gt;2 Dispatch</th><th>In Full (1st)</th><th>In Full (2nd)</th><th>In Full (&gt;2)</th><th>Trips/Install</th>
+        </tr></thead>
+        <tbody id="dv-t1-tbody"></tbody>
+      </table></div>
+    </div>
+    <div class="section">
+      <div class="section-hd">
+        <div class="section-title">Table 2 — DV & Porter Utilization per Warehouse</div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>WH</th><th># Installs</th><th># Deliveries</th><th>Trips/Install</th><th># of DVs</th><th>DV Trips</th><th>Porter Trips</th><th>DV%</th><th>Porter%</th><th>Installs/DV</th>
+        </tr></thead>
+        <tbody id="dv-t2-tbody"></tbody>
+      </table></div>
+    </div>
+    <div class="section">
+      <div class="section-hd"><div class="section-title">B2B / Special Accounts</div></div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Account</th><th># Installs</th><th># Deliveries</th><th>Trips/Install</th><th>DV%</th><th>Porter%</th><th>Note</th>
+        </tr></thead>
+        <tbody id="dv-b2b-tbody"></tbody>
+      </table></div>
+    </div>
+  </div>
+</div>
+
 </div><!-- /main -->
 
 <script>
@@ -542,11 +586,13 @@ async function loadData() {
     RAW_PART = partCsv ? parsePartLoad(partCsv) : [];
     ALL_DATA = [...RAW_FULL, ...RAW_PART];
 
-    // Load DV tab in background (data kept for reference)
+    // Load DV tab in background — doesn't block main dashboard render
     fetchSheetByName(SHEET_NAMES.DV).then(dvCsv => {
-      RAW_DV = dvCsv ? parseCSV(dvCsv) : [];
+      RAW_DV = dvCsv ? parseLastMileDV(dvCsv) : [];
+      if (activeTab === 'dv') renderDVAnalytics();
     }).catch(() => {
       RAW_DV = [];
+      if (activeTab === 'dv') renderDVAnalytics();
     });
 
     // Last Mile — all rows whose movement is "Last Mile" (any variant)
@@ -940,6 +986,7 @@ function renderActiveTab() {
   else if (activeTab==='midmile') renderMidMile();
   else if (activeTab==='lastmile') renderLastMile();
   else if (activeTab==='vendors') { renderVendorLanes(); renderVendorList(); }
+  else if (activeTab==='dv') renderDVAnalytics();
 }
 
 // ============================================================
@@ -1551,7 +1598,189 @@ function openVP(vendor) {
 
 function closeVP() { document.getElementById('vp-wrap').style.display='none'; selectedVendor=null; }
 
+// ============================================================
+// LAST MILE DV — Parser + KPI computation from live GSheet
+// ============================================================
+function normDVWH(wh) {
+  const w = (wh||'').trim();
+  if (/nagpur\s*kapsi/i.test(w))           return 'Nagpur WH';
+  if (/gurgaon|ghaziabad/i.test(w))        return 'NCR WH';
+  return w.replace(/\s*WH\s*-\s*SSE\s*$/i,'').replace(/\s*-\s*SSE\s*$/i,'').trim();
+}
 
+const DV_EXCLUDED_CUSTOMERS = new Set(['Solarsquare Energy Pvt Ltd - Debtors']);
+const DV_EXCLUDED_TYPES     = new Set(['Consumption']);
+
+function parseLastMileDV(csv) {
+  const rows = parseCSV(csv);
+  return rows.filter(r => {
+    const dt = (r['custom_dispatch_type']||'').trim();
+    const cust = (r['customer']||'').trim();
+    return !DV_EXCLUDED_TYPES.has(dt) && !DV_EXCLUDED_CUSTOMERS.has(cust);
+  }).map(r => ({
+    doc:          (r['parent']||'').trim(),
+    customer:     (r['customer']||'').trim(),
+    dispatchType: (r['custom_dispatch_type']||'').trim(),
+    vehicle:      (r['Vehicle No']||'').trim(),
+    warehouse:    normDVWH(r['set_warehouse']||r['warehouse']||''),
+    reason:       (r['Reason for Second Delivery']||'').trim(),
+    date:         (r['posting_date']||'').trim(),
+    isPorter:     (r['Vehicle No']||'').trim() === 'Other Vehicle',
+    isDV:         (r['Vehicle No']||'').trim() !== 'Other Vehicle' && (r['Vehicle No']||'').trim() !== '',
+    isInstall:    (r['custom_dispatch_type']||'').trim() === 'Installation',
+    isAdd:        (r['custom_dispatch_type']||'').trim() === 'Additional material',
+  }));
+}
+
+function computeDVKPIs(dvRows) {
+  if (!dvRows || !dvRows.length) return { wh: {}, b2b: {}, totals: {} };
+  const custMap = {};
+  for (const r of dvRows) { if (!custMap[r.customer]) custMap[r.customer] = []; custMap[r.customer].push(r); }
+  const isB2B = cust => /^b2b\s/i.test(cust) || /^amc\s/i.test(cust) || /^pc\s/i.test(cust);
+  const wh = {}, b2b = {};
+
+  for (const [cust, docs] of Object.entries(custMap)) {
+    docs.sort((a,b) => a.doc < b.doc ? -1 : 1);
+    const installDocs = docs.filter(d => d.isInstall);
+    if (!installDocs.length) continue;
+    const ownerWH = installDocs[0].warehouse;
+    const bucket  = isB2B(cust) ? b2b : wh;
+    if (!bucket[ownerWH]) bucket[ownerWH] = { installs:0, second:0, gt2:0, inFull1:0, inFull2:0, inFull3:0, deliveries:0, dvTrips:0, porterTrips:0, dvVehicles:new Set() };
+    const s = bucket[ownerWH];
+    const n = docs.length;
+    s.installs++; s.deliveries += n;
+    s.dvTrips += docs.filter(d=>d.isDV).length;
+    s.porterTrips += docs.filter(d=>d.isPorter).length;
+    docs.filter(d=>d.isDV).forEach(d=>s.dvVehicles.add(d.vehicle));
+    if (n >= 2) s.second++;
+    if (n > 2)  s.gt2++;
+    if (n === 1) s.inFull1++;
+    else if (n === 2) s.inFull2++;
+    else s.inFull3++;
+  }
+
+  const finalise = obj => {
+    const out = {};
+    for (const [k,s] of Object.entries(obj)) {
+      const numDVs = s.dvVehicles.size;
+      out[k] = {
+        installs:s.installs, first:s.installs, second:s.second, gt2:s.gt2,
+        inFull1:s.inFull1, inFull2:s.inFull2, inFull3:s.inFull3,
+        deliveries:s.deliveries, dvTrips:s.dvTrips, porterTrips:s.porterTrips, numDVs,
+        tpi: s.installs ? +(s.deliveries/s.installs).toFixed(2) : 0,
+        ipd: numDVs ? +(s.installs/numDVs).toFixed(1) : 0,
+        dvPct: s.deliveries ? +(s.dvTrips/s.deliveries*100).toFixed(1) : 0,
+        porterPct: s.deliveries ? +(s.porterTrips/s.deliveries*100).toFixed(1) : 0,
+      };
+    }
+    return out;
+  };
+
+  const whFinal = finalise(wh), b2bFinal = finalise(b2b);
+  const whVals = Object.values(whFinal);
+  const totInstalls = whVals.reduce((s,v)=>s+v.installs,0);
+  const totDeliveries = whVals.reduce((s,v)=>s+v.deliveries,0);
+  const totDV = whVals.reduce((s,v)=>s+v.dvTrips,0);
+  const totPorter = whVals.reduce((s,v)=>s+v.porterTrips,0);
+  const totInFull1 = whVals.reduce((s,v)=>s+v.inFull1,0);
+  const totInFull2 = whVals.reduce((s,v)=>s+v.inFull2,0);
+  const totInFull3 = whVals.reduce((s,v)=>s+v.inFull3,0);
+
+  return { wh: whFinal, b2b: b2bFinal, totals: {
+    installs:totInstalls, deliveries:totDeliveries, dvTrips:totDV, porterTrips:totPorter,
+    inFull1:totInFull1, inFull2:totInFull2, inFull3:totInFull3,
+    tpi: totInstalls ? +(totDeliveries/totInstalls).toFixed(2) : 0,
+    dvPct: totDeliveries ? +(totDV/totDeliveries*100).toFixed(1) : 0,
+    in1Pct: totInstalls ? +(totInFull1/totInstalls*100).toFixed(1) : 0,
+    in2Pct: totInstalls ? +(totInFull2/totInstalls*100).toFixed(1) : 0,
+    gt2Pct: totInstalls ? +(totInFull3/totInstalls*100).toFixed(1) : 0,
+  }};
+}
+
+function renderDVAnalytics() {
+  const loadEl = document.getElementById('dv-loading');
+  const contentEl = document.getElementById('dv-content');
+
+  if (!RAW_DV.length) {
+    loadEl.innerHTML = `<div class="error-state">⚠️ No Last Mile DV data found.<br>Make sure the <strong>"Last Mile DV"</strong> tab exists in the Google Sheet and is shared.<br><a onclick="refreshData()">↻ Try again</a></div>`;
+    return;
+  }
+
+  loadEl.style.display = 'none';
+  contentEl.style.display = 'block';
+
+  const { wh, b2b, totals } = computeDVKPIs(RAW_DV);
+  const whKeys = Object.keys(wh).sort((a,b) => wh[b].installs - wh[a].installs);
+  const b2bKeys = Object.keys(b2b).sort((a,b) => b2b[b].installs - b2b[a].installs);
+
+  document.getElementById('dv-summary-kpis').innerHTML = [
+    buildKPICard('Total Installs', totals.installs.toLocaleString('en-IN'), `${whKeys.length} warehouses · live data`, 'blue','🏗️'),
+    buildKPICard('Total Deliveries', totals.deliveries.toLocaleString('en-IN'), `${totals.tpi} trips per install avg`, 'purple','🚚'),
+    buildKPICard('In Full on 1st Dispatch', totals.in1Pct+'%', `${totals.inFull1.toLocaleString('en-IN')} installs — no re-delivery`, 'green','✅'),
+    buildKPICard('In Full on 2nd Dispatch', totals.in2Pct+'%', `${totals.inFull2.toLocaleString('en-IN')} installs — 1 re-delivery`, 'yellow','🔄'),
+    buildKPICard('>2 Dispatches', totals.gt2Pct+'%', `${totals.inFull3.toLocaleString('en-IN')} installs needed 3+ trips`, 'red','⚠️'),
+    buildKPICard('DV Utilization', totals.dvPct+'%', `${totals.dvTrips.toLocaleString('en-IN')} DV · ${totals.porterTrips.toLocaleString('en-IN')} Porter trips`, 'cyan','🚛'),
+  ].join('');
+
+  const avgTPI = totals.tpi;
+  const t1Row = (key, d) => {
+    const in1P = d.installs ? (d.inFull1/d.installs*100).toFixed(0) : 0;
+    const in2P = d.installs ? (d.inFull2/d.installs*100).toFixed(0) : 0;
+    const in3P = d.installs ? (d.inFull3/d.installs*100).toFixed(0) : 0;
+    const gt2P = d.installs ? (d.gt2/d.installs*100).toFixed(0) : 0;
+    const tpiC = d.tpi > avgTPI*1.15 ? 'var(--red)' : d.tpi < avgTPI*0.9 ? 'var(--green)' : 'var(--yellow)';
+    return `<tr>
+      <td style="font-weight:600;color:var(--text)">${key}</td>
+      <td style="font-weight:700;font-family:var(--mono)">${d.installs.toLocaleString('en-IN')}</td>
+      <td style="font-family:var(--mono)">${d.first.toLocaleString('en-IN')}</td>
+      <td style="font-family:var(--mono)">${d.second.toLocaleString('en-IN')} <span style="font-size:9px;color:var(--text4)">(${(d.installs?d.second/d.installs*100:0).toFixed(0)}%)</span></td>
+      <td style="font-family:var(--mono)">${d.gt2.toLocaleString('en-IN')} <span style="font-size:9px;color:${d.installs&&d.gt2/d.installs>0.1?'var(--red)':'var(--text4)'}">(${gt2P}%)</span></td>
+      <td><div class="fill-bar-wrap"><div class="fill-bar-bg"><div class="fill-bar-fg" style="width:${in1P}%;background:var(--green)"></div></div><span class="fill-val" style="color:var(--green)">${in1P}%</span></div></td>
+      <td><div class="fill-bar-wrap"><div class="fill-bar-bg"><div class="fill-bar-fg" style="width:${in2P}%;background:var(--yellow)"></div></div><span class="fill-val" style="color:var(--yellow)">${in2P}%</span></div></td>
+      <td><div class="fill-bar-wrap"><div class="fill-bar-bg"><div class="fill-bar-fg" style="width:${in3P}%;background:${d.installs&&d.inFull3/d.installs>0.1?'var(--red)':'var(--text4)'}"></div></div><span class="fill-val" style="color:${d.installs&&d.inFull3/d.installs>0.1?'var(--red)':'var(--text4)'}">${in3P}%</span></div></td>
+      <td style="font-weight:800;font-family:var(--mono);color:${tpiC}">${d.tpi}</td>
+    </tr>`;
+  };
+
+  document.getElementById('dv-t1-tbody').innerHTML =
+    whKeys.map(k => t1Row(k, wh[k])).join('') ||
+    '<tr><td colspan="9" class="no-data">No data</td></tr>';
+
+  const t2Row = (key, d) => `<tr>
+    <td style="font-weight:600;color:var(--text)">${key}</td>
+    <td style="font-family:var(--mono)">${d.installs.toLocaleString('en-IN')}</td>
+    <td style="font-family:var(--mono)">${d.deliveries.toLocaleString('en-IN')}</td>
+    <td style="font-family:var(--mono);font-weight:700">${d.tpi}</td>
+    <td style="font-family:var(--mono)">${d.numDVs || '—'}</td>
+    <td style="font-family:var(--mono)">${d.dvTrips.toLocaleString('en-IN')}</td>
+    <td style="font-family:var(--mono)">${d.porterTrips.toLocaleString('en-IN')}</td>
+    <td><span class="pill ${d.dvPct>=90?'pill-green':d.dvPct>=70?'pill-yellow':'pill-red'}">${d.dvPct}%</span></td>
+    <td><span class="pill ${d.porterPct>=30?'pill-red':d.porterPct>=15?'pill-yellow':'pill-gray'}">${d.porterPct}%</span></td>
+    <td style="font-family:var(--mono);color:${d.ipd>100?'var(--green)':d.ipd>0?'var(--text4)':'var(--text4)'}">${d.ipd > 0 ? d.ipd : '—'}</td>
+  </tr>`;
+
+  document.getElementById('dv-t2-tbody').innerHTML =
+    whKeys.map(k => t2Row(k, wh[k])).join('') ||
+    '<tr><td colspan="10" class="no-data">No data</td></tr>';
+
+  const b2bEl = document.getElementById('dv-b2b-tbody');
+  if (b2bKeys.length) {
+    b2bEl.innerHTML = b2bKeys.map(k => {
+      const d = b2b[k];
+      return `<tr>
+        <td style="font-weight:600;color:var(--text)">${k}</td>
+        <td style="font-family:var(--mono)">${d.installs}</td>
+        <td style="font-family:var(--mono)">${d.deliveries}</td>
+        <td style="font-weight:800;font-family:var(--mono);color:var(--red)">${d.tpi}</td>
+        <td><span class="pill ${d.dvPct>0?'pill-blue':'pill-gray'}">${d.dvPct}%</span></td>
+        <td><span class="pill pill-yellow">${d.porterPct}%</span></td>
+        <td style="font-size:11px;color:var(--text3)">B2B / special account</td>
+      </tr>`;
+    }).join('');
+  } else {
+    b2bEl.innerHTML = '<tr><td colspan="7" class="no-data">No B2B accounts in current data</td></tr>';
+  }
+}
 
 </script>
 </body>
